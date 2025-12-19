@@ -6,16 +6,19 @@ class AudioCaptureManager {
     private let transcriptionStore: TranscriptionStore
 
     private var microphoneCapture: MicrophoneCapture?
-    private var systemAudioCapture: Any? // Type-erased for @available check
+    private var systemAudioCapture: Any?
 
-    private var audioBuffers: [(buffer: AVAudioPCMBuffer, source: AudioSource)] = []
-    private let bufferLock = NSLock()
-    private var transcriptionTask: Task<Void, Never>?
+    private let micTranscriber = SpeechTranscriber()
+    private let systemTranscriber = SpeechTranscriber()
+
+    private var lastMicText = ""
+    private var lastSystemText = ""
 
     init(recordingState: RecordingState, transcriptionStore: TranscriptionStore) {
         self.recordingState = recordingState
         self.transcriptionStore = transcriptionStore
         setupAudioCapture()
+        setupTranscribers()
     }
 
     private func setupAudioCapture() {
@@ -38,11 +41,46 @@ class AudioCaptureManager {
         }
     }
 
+    private func setupTranscribers() {
+        micTranscriber.onTranscription = { [weak self] text, isFinal in
+            guard let self = self, !text.isEmpty else { return }
+            DispatchQueue.main.async {
+                if text != self.lastMicText {
+                    let newText = String(text.dropFirst(self.lastMicText.count))
+                    if !newText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        self.recordingState.appendTranscript(newText.trimmingCharacters(in: .whitespaces), speaker: .you)
+                    }
+                    self.lastMicText = text
+                }
+            }
+        }
+
+        systemTranscriber.onTranscription = { [weak self] text, isFinal in
+            guard let self = self, !text.isEmpty else { return }
+            DispatchQueue.main.async {
+                if text != self.lastSystemText {
+                    let newText = String(text.dropFirst(self.lastSystemText.count))
+                    if !newText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        self.recordingState.appendTranscript(newText.trimmingCharacters(in: .whitespaces), speaker: .other)
+                    }
+                    self.lastSystemText = text
+                }
+            }
+        }
+    }
+
     func startRecording() {
         Task {
+            // Request permissions
             let micPermission = await microphoneCapture?.requestPermission() ?? false
             guard micPermission else {
                 print("Microphone permission denied")
+                return
+            }
+
+            let speechPermission = await micTranscriber.requestPermission()
+            guard speechPermission else {
+                print("Speech recognition permission denied")
                 return
             }
 
@@ -51,6 +89,15 @@ class AudioCaptureManager {
             }
 
             do {
+                // Reset state
+                lastMicText = ""
+                lastSystemText = ""
+
+                // Start transcribers
+                try micTranscriber.startTranscribing()
+                try systemTranscriber.startTranscribing()
+
+                // Start audio capture
                 try microphoneCapture?.start()
 
                 if #available(macOS 12.3, *), let sysCapture = systemAudioCapture as? SystemAudioCapture {
@@ -60,8 +107,6 @@ class AudioCaptureManager {
                 await MainActor.run {
                     recordingState.startRecording()
                 }
-
-                startTranscriptionTask()
             } catch {
                 print("Failed to start: \(error)")
                 await MainActor.run { recordingState.stopRecording() }
@@ -71,16 +116,19 @@ class AudioCaptureManager {
 
     func stopRecording() {
         Task {
+            // Stop audio capture
             microphoneCapture?.stop()
 
             if #available(macOS 12.3, *), let sysCapture = systemAudioCapture as? SystemAudioCapture {
                 try? await sysCapture.stop()
             }
 
-            transcriptionTask?.cancel()
-            transcriptionTask = nil
+            // Stop transcribers
+            micTranscriber.stopTranscribing()
+            systemTranscriber.stopTranscribing()
 
-            await processRemainingBuffers()
+            // Small delay to let final transcriptions come through
+            try? await Task.sleep(nanoseconds: 500_000_000)
 
             await MainActor.run {
                 let transcript = recordingState.currentTranscript
@@ -96,47 +144,11 @@ class AudioCaptureManager {
     }
 
     private func handleAudioBuffer(_ buffer: AVAudioPCMBuffer, from source: AudioSource) {
-        bufferLock.lock()
-        defer { bufferLock.unlock() }
-        audioBuffers.append((buffer: buffer, source: source))
-
-        if audioBuffers.count > 160 {
-            audioBuffers.removeFirst(audioBuffers.count - 160)
+        switch source {
+        case .microphone:
+            micTranscriber.appendAudioBuffer(buffer)
+        case .system:
+            systemTranscriber.appendAudioBuffer(buffer)
         }
-    }
-
-    private func startTranscriptionTask() {
-        transcriptionTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                await processAudioBuffers()
-            }
-        }
-    }
-
-    private func processAudioBuffers() async {
-        bufferLock.lock()
-        let buffersToProcess = audioBuffers
-        audioBuffers.removeAll()
-        bufferLock.unlock()
-
-        guard !buffersToProcess.isEmpty else { return }
-
-        // Stub transcription - replace with Whisper integration
-        let micBuffers = buffersToProcess.filter { $0.source == .microphone }
-        let systemBuffers = buffersToProcess.filter { $0.source == .system }
-
-        await MainActor.run {
-            if !micBuffers.isEmpty {
-                recordingState.appendTranscript("[You speaking...]", speaker: .you)
-            }
-            if !systemBuffers.isEmpty {
-                recordingState.appendTranscript("[Other speaking...]", speaker: .other)
-            }
-        }
-    }
-
-    private func processRemainingBuffers() async {
-        await processAudioBuffers()
     }
 }

@@ -26,5 +26,7 @@
 	<string>Listener needs access to your microphone to record and transcribe audio.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Listener needs access to screen capture for ScreenCaptureKit functionality.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Listener uses speech recognition to transcribe audio in real-time.</string>
 </dict>
 </plist>
