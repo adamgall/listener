@@ -118,7 +118,7 @@ extension SystemAudioCapture: SCStreamOutput {
     private func createPCMBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription),
-              let format = AVAudioFormat(streamDescription: streamDescription.pointee) else {
+              let format = AVAudioFormat(streamDescription: streamDescription) else {
             return nil
         }
 

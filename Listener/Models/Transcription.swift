@@ -1,6 +1,14 @@
 import Foundation
 
-struct Transcription: Identifiable, Codable {
+struct Transcription: Identifiable, Codable, Hashable {
+    static func == (lhs: Transcription, rhs: Transcription) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
     let id: UUID
     var title: String
     var content: String
