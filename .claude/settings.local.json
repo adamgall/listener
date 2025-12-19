@@ -1,7 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(bd update:*)",
+      "Bash(xcodebuild:*)",
+      "Bash(swiftc -typecheck:*)",
+      "Bash(/Users/train/Developer/listener/Listener/Models/*.swift)",
+      "Bash(/Users/train/Developer/listener/Listener/Audio/*.swift)",
+      "Bash(/Users/train/Developer/listener/Listener/Transcription/*.swift)",
+      "Bash(/Users/train/Developer/listener/Listener/*.swift)",
+      "Bash(bd stats:*)",
+      "Bash(bd ready:*)"
     ]
   }
 }
