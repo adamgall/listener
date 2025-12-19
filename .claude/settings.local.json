@@ -12,7 +12,8 @@
       "Bash(/Users/train/Developer/listener/Listener/Transcription/*.swift)",
       "Bash(/Users/train/Developer/listener/Listener/*.swift)",
       "Bash(bd stats:*)",
-      "Bash(bd ready:*)"
+      "Bash(bd ready:*)",
+      "Bash(bd sync:*)"
     ]
   }
 }
