@@ -27,14 +27,23 @@ class RecordingState: ObservableObject {
     }
 
     func appendTranscript(_ text: String, speaker: Speaker) {
-        let entry = "[\(speaker.rawValue)]: \(text)\n"
+        let entry = "[\(speaker.description)]: \(text)\n"
         DispatchQueue.main.async {
             self.currentTranscript += entry
         }
     }
 }
 
-enum Speaker: String {
-    case you = "You"
-    case other = "Other"
+enum Speaker: Hashable, CustomStringConvertible {
+    case you
+    case speaker(Int)
+
+    var description: String {
+        switch self {
+        case .you:
+            return "You"
+        case .speaker(let id):
+            return "Speaker \(id)"
+        }
+    }
 }

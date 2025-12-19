@@ -10,9 +10,14 @@ class AudioCaptureManager {
 
     private let micTranscriber = SpeechTranscriber()
     private let systemTranscriber = SpeechTranscriber()
+    private let speakerDiarizer = SpeakerDiarizer()
 
     private var lastMicText = ""
     private var lastSystemText = ""
+    private var currentSpeakerId = "SPEAKER_0"
+    private var speakerIdMap: [String: Int] = [:]
+    private var nextSpeakerNumber = 1
+    private var diarizationTimer: Timer?
 
     init(recordingState: RecordingState, transcriptionStore: TranscriptionStore) {
         self.recordingState = recordingState
@@ -61,11 +66,29 @@ class AudioCaptureManager {
                 if text != self.lastSystemText {
                     let newText = String(text.dropFirst(self.lastSystemText.count))
                     if !newText.trimmingCharacters(in: .whitespaces).isEmpty {
-                        self.recordingState.appendTranscript(newText.trimmingCharacters(in: .whitespaces), speaker: .other)
+                        let speakerNum = self.getSpeakerNumber(for: self.currentSpeakerId)
+                        self.recordingState.appendTranscript(newText.trimmingCharacters(in: .whitespaces), speaker: .speaker(speakerNum))
                     }
                     self.lastSystemText = text
                 }
             }
+        }
+    }
+
+    private func getSpeakerNumber(for speakerId: String) -> Int {
+        if let existing = speakerIdMap[speakerId] {
+            return existing
+        }
+        let num = nextSpeakerNumber
+        speakerIdMap[speakerId] = num
+        nextSpeakerNumber += 1
+        return num
+    }
+
+    private func updateDiarization() {
+        let segments = speakerDiarizer.processDiarization()
+        if let lastSegment = segments.last {
+            currentSpeakerId = lastSegment.speakerId
         }
     }
 
@@ -89,9 +112,16 @@ class AudioCaptureManager {
             }
 
             do {
+                // Initialize speaker diarizer
+                try await speakerDiarizer.initialize()
+
                 // Reset state
                 lastMicText = ""
                 lastSystemText = ""
+                currentSpeakerId = "SPEAKER_0"
+                speakerIdMap.removeAll()
+                nextSpeakerNumber = 1
+                speakerDiarizer.reset()
 
                 // Start transcribers
                 try micTranscriber.startTranscribing()
@@ -106,6 +136,11 @@ class AudioCaptureManager {
 
                 await MainActor.run {
                     recordingState.startRecording()
+
+                    // Start periodic diarization updates
+                    self.diarizationTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                        self?.updateDiarization()
+                    }
                 }
             } catch {
                 print("Failed to start: \(error)")
@@ -116,6 +151,12 @@ class AudioCaptureManager {
 
     func stopRecording() {
         Task {
+            // Stop diarization timer
+            await MainActor.run {
+                diarizationTimer?.invalidate()
+                diarizationTimer = nil
+            }
+
             // Stop audio capture
             microphoneCapture?.stop()
 
@@ -149,6 +190,7 @@ class AudioCaptureManager {
             micTranscriber.appendAudioBuffer(buffer)
         case .system:
             systemTranscriber.appendAudioBuffer(buffer)
+            speakerDiarizer.appendAudioBuffer(buffer)
         }
     }
 }

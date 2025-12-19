@@ -24,6 +24,9 @@ Pods/
 .LSOverride
 ._*
 
+# Claude Code
+.claude/
+
 # App specific
 *.app
 *.ipa
