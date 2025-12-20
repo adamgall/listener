@@ -13,6 +13,7 @@ class AudioCaptureManager {
     private let speakerDiarizer = SpeakerDiarizer()
 
     private var lastMicText = ""
+    private var lastMicWordSegments: [WordSegment] = []
     private var lastSystemText = ""
     private var currentSpeakerId = "SPEAKER_0"
     private var speakerIdMap: [String: Int] = [:]
@@ -48,8 +49,8 @@ class AudioCaptureManager {
     }
 
     private func setupTranscribers() {
-        micTranscriber.onTranscription = { [weak self] text, isFinal in
-            print("DEBUG: micTranscriber got: '\(text.prefix(80))...' isFinal=\(isFinal)")
+        micTranscriber.onTranscription = { [weak self] text, wordSegments, isFinal in
+            print("DEBUG: micTranscriber got: '\(text.prefix(80))...' isFinal=\(isFinal), words=\(wordSegments.count)")
             guard let self = self else { return }
 
             // Only update if we have actual text (not empty/shorter than what we have)
@@ -62,6 +63,7 @@ class AudioCaptureManager {
 
             DispatchQueue.main.async {
                 self.lastMicText = trimmedText
+                self.lastMicWordSegments = wordSegments
 
                 // Use diarization to determine speaker
                 // Assume first speaker detected (usually '1') is "You"
@@ -76,7 +78,7 @@ class AudioCaptureManager {
             }
         }
 
-        systemTranscriber.onTranscription = { [weak self] text, isFinal in
+        systemTranscriber.onTranscription = { [weak self] text, _, isFinal in
             print("DEBUG: systemTranscriber got: '\(text.prefix(80))...' isFinal=\(isFinal)")
             guard let self = self, !text.isEmpty else { return }
             DispatchQueue.main.async {
@@ -93,6 +95,72 @@ class AudioCaptureManager {
         speakerIdMap[speakerId] = num
         nextSpeakerNumber += 1
         return num
+    }
+
+    private func alignWordsToSpeakers(
+        words: [WordSegment],
+        speakers: [(speakerId: String, startTime: Float, endTime: Float)]
+    ) -> [(word: String, speakerId: String)] {
+        guard !speakers.isEmpty else {
+            // No diarization data - assign all words to "You"
+            return words.map { ($0.word, "1") }
+        }
+
+        var result: [(word: String, speakerId: String)] = []
+        var lastSpeakerId = speakers.first?.speakerId ?? "1"
+
+        for word in words {
+            let wordMidpoint = Float(word.timestamp + word.duration / 2)
+
+            // Find which speaker segment contains this word's midpoint
+            var foundSpeaker: String?
+            for segment in speakers {
+                if wordMidpoint >= segment.startTime && wordMidpoint <= segment.endTime {
+                    foundSpeaker = segment.speakerId
+                    break
+                }
+            }
+
+            let speakerId = foundSpeaker ?? lastSpeakerId
+            result.append((word.word, speakerId))
+            lastSpeakerId = speakerId
+        }
+
+        return result
+    }
+
+    private func formatAlignedTranscript(
+        alignedWords: [(word: String, speakerId: String)]
+    ) -> String {
+        guard !alignedWords.isEmpty else { return "" }
+
+        var result = ""
+        var currentSpeaker = ""
+        var currentWords: [String] = []
+
+        for (word, speakerId) in alignedWords {
+            if speakerId != currentSpeaker {
+                // Flush previous speaker's words
+                if !currentWords.isEmpty {
+                    let label = currentSpeaker == "1" ? "You" : "Speaker \(currentSpeaker)"
+                    if !result.isEmpty { result += "\n\n" }
+                    result += "[\(label)]: \(currentWords.joined(separator: " "))"
+                }
+                currentSpeaker = speakerId
+                currentWords = [word]
+            } else {
+                currentWords.append(word)
+            }
+        }
+
+        // Flush final speaker's words
+        if !currentWords.isEmpty {
+            let label = currentSpeaker == "1" ? "You" : "Speaker \(currentSpeaker)"
+            if !result.isEmpty { result += "\n\n" }
+            result += "[\(label)]: \(currentWords.joined(separator: " "))"
+        }
+
+        return result
     }
 
     private func updateDiarization() {
@@ -143,6 +211,7 @@ class AudioCaptureManager {
 
                 // Reset state
                 lastMicText = ""
+                lastMicWordSegments = []
                 lastSystemText = ""
                 currentSpeakerId = "SPEAKER_0"
                 speakerIdMap.removeAll()
@@ -229,30 +298,26 @@ class AudioCaptureManager {
                 let duration = recordingState.recordingDuration
                 recordingState.stopRecording()
 
-                // Format transcript with speaker info from diarization
+                // Format transcript with word-level speaker attribution
                 var transcript = ""
-                let rawText = self.lastMicText
+                let wordSegments = self.lastMicWordSegments
 
-                if !rawText.isEmpty {
+                if !wordSegments.isEmpty {
                     let uniqueSpeakers = Set(diarizationSegments.map { $0.speakerId }).sorted()
                     let speakerCount = uniqueSpeakers.count
 
                     if speakerCount <= 1 {
                         // Single speaker - label as "You"
-                        transcript = "[You]: \(rawText)"
+                        let text = wordSegments.map { $0.word }.joined(separator: " ")
+                        transcript = "[You]: \(text)"
                     } else {
-                        // Multiple speakers detected
-                        // For now, show a header with speaker breakdown and the full transcript
-                        // TODO: Implement proper text-to-speaker alignment using word timestamps
-                        var speakerSummary: [String] = []
-                        for speakerId in uniqueSpeakers {
-                            let segments = diarizationSegments.filter { $0.speakerId == speakerId }
-                            let totalTime = segments.reduce(0.0) { $0 + ($1.endTime - $1.startTime) }
-                            let label = speakerId == "1" ? "You" : "Speaker \(speakerId)"
-                            speakerSummary.append("\(label): \(String(format: "%.0f", totalTime))s")
-                        }
-
-                        transcript = "[Speakers: \(speakerSummary.joined(separator: ", "))]\n\n\(rawText)"
+                        // Multiple speakers - align words to speakers
+                        print("DEBUG: Aligning \(wordSegments.count) words to \(diarizationSegments.count) speaker segments")
+                        let alignedWords = self.alignWordsToSpeakers(
+                            words: wordSegments,
+                            speakers: diarizationSegments
+                        )
+                        transcript = self.formatAlignedTranscript(alignedWords: alignedWords)
                     }
                 }
 

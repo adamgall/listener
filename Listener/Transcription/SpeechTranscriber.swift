@@ -2,12 +2,18 @@ import Foundation
 import Speech
 import AVFoundation
 
+struct WordSegment {
+    let word: String
+    let timestamp: TimeInterval
+    let duration: TimeInterval
+}
+
 class SpeechTranscriber {
     private var recognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
 
-    var onTranscription: ((String, Bool) -> Void)? // (text, isFinal)
+    var onTranscription: ((String, [WordSegment], Bool) -> Void)? // (text, wordSegments, isFinal)
 
     init() {
         recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -63,8 +69,18 @@ class SpeechTranscriber {
             if let result = result {
                 let text = result.bestTranscription.formattedString
                 let isFinal = result.isFinal
-                print("DEBUG: SpeechTranscriber - got result: '\(text.prefix(30))...' isFinal=\(isFinal)")
-                self?.onTranscription?(text, isFinal)
+
+                // Extract word-level segments with timestamps
+                let wordSegments = result.bestTranscription.segments.map { segment in
+                    WordSegment(
+                        word: segment.substring,
+                        timestamp: segment.timestamp,
+                        duration: segment.duration
+                    )
+                }
+
+                print("DEBUG: SpeechTranscriber - got result: '\(text.prefix(30))...' isFinal=\(isFinal), words=\(wordSegments.count)")
+                self?.onTranscription?(text, wordSegments, isFinal)
 
                 if isFinal {
                     self?.recognitionRequest = nil
