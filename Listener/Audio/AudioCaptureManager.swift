@@ -134,6 +134,24 @@ class AudioCaptureManager {
     ) -> String {
         guard !alignedWords.isEmpty else { return "" }
 
+        // First speaker encountered is assumed to be "You" (the mic owner)
+        let firstSpeakerId = alignedWords.first?.speakerId ?? ""
+        var otherSpeakerCount = 0
+        var speakerLabels: [String: String] = [:]
+
+        func labelFor(_ speakerId: String) -> String {
+            if speakerId == firstSpeakerId {
+                return "You"
+            }
+            if let existing = speakerLabels[speakerId] {
+                return existing
+            }
+            otherSpeakerCount += 1
+            let label = "Speaker \(otherSpeakerCount + 1)"
+            speakerLabels[speakerId] = label
+            return label
+        }
+
         var result = ""
         var currentSpeaker = ""
         var currentWords: [String] = []
@@ -142,7 +160,7 @@ class AudioCaptureManager {
             if speakerId != currentSpeaker {
                 // Flush previous speaker's words
                 if !currentWords.isEmpty {
-                    let label = currentSpeaker == "1" ? "You" : "Speaker \(currentSpeaker)"
+                    let label = labelFor(currentSpeaker)
                     if !result.isEmpty { result += "\n\n" }
                     result += "[\(label)]: \(currentWords.joined(separator: " "))"
                 }
@@ -155,7 +173,7 @@ class AudioCaptureManager {
 
         // Flush final speaker's words
         if !currentWords.isEmpty {
-            let label = currentSpeaker == "1" ? "You" : "Speaker \(currentSpeaker)"
+            let label = labelFor(currentSpeaker)
             if !result.isEmpty { result += "\n\n" }
             result += "[\(label)]: \(currentWords.joined(separator: " "))"
         }
@@ -306,10 +324,21 @@ class AudioCaptureManager {
                     let uniqueSpeakers = Set(diarizationSegments.map { $0.speakerId }).sorted()
                     let speakerCount = uniqueSpeakers.count
 
+                    print("DEBUG: Word segments: \(wordSegments.count), Diarization segments: \(diarizationSegments.count), Unique speakers: \(speakerCount)")
+                    if !wordSegments.isEmpty {
+                        let firstWord = wordSegments.first!
+                        let lastWord = wordSegments.last!
+                        print("DEBUG: Words span \(String(format: "%.1f", firstWord.timestamp))s to \(String(format: "%.1f", lastWord.timestamp + lastWord.duration))s")
+                    }
+                    if !diarizationSegments.isEmpty {
+                        print("DEBUG: Diarization spans \(String(format: "%.1f", diarizationSegments.first!.startTime))s to \(String(format: "%.1f", diarizationSegments.last!.endTime))s")
+                    }
+
                     if speakerCount <= 1 {
                         // Single speaker - label as "You"
                         let text = wordSegments.map { $0.word }.joined(separator: " ")
                         transcript = "[You]: \(text)"
+                        print("DEBUG: Single speaker detected, using simple format")
                     } else {
                         // Multiple speakers - align words to speakers
                         print("DEBUG: Aligning \(wordSegments.count) words to \(diarizationSegments.count) speaker segments")
