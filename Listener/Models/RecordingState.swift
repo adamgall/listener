@@ -4,7 +4,7 @@ import Combine
 class RecordingState: ObservableObject {
     @Published var isRecording = false
     @Published var currentTranscript = ""
-    @Published var currentSpeaker: Speaker = .you
+    @Published var currentSpeaker: Speaker = .speaker1
     @Published var recordingDuration: TimeInterval = 0
 
     private var timer: Timer?
@@ -13,7 +13,7 @@ class RecordingState: ObservableObject {
     func startRecording() {
         isRecording = true
         currentTranscript = ""
-        currentSpeaker = .you
+        currentSpeaker = .speaker1
         startTime = Date()
         recordingDuration = 0
 
@@ -38,13 +38,12 @@ class RecordingState: ObservableObject {
 }
 
 enum Speaker: Hashable, CustomStringConvertible {
-    case you
     case speaker(Int)
+
+    static let speaker1 = Speaker.speaker(1)
 
     var description: String {
         switch self {
-        case .you:
-            return "You"
         case .speaker(let id):
             return "Speaker \(id)"
         }

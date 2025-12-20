@@ -235,10 +235,10 @@ struct SpeakerBadge: View {
 
     private var speakerColor: Color {
         switch speaker {
-        case .you:
-            return .blue
-        case .speaker:
-            return .orange
+        case .speaker(let id):
+            // Cycle through colors for different speakers
+            let colors: [Color] = [.blue, .orange, .green, .purple, .pink]
+            return colors[(id - 1) % colors.count]
         }
     }
 }

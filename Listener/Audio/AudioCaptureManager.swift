@@ -65,14 +65,9 @@ class AudioCaptureManager {
                 self.lastMicText = trimmedText
                 self.lastMicWordSegments = wordSegments
 
-                // Use diarization to determine speaker
-                // Assume first speaker detected (usually '1') is "You"
-                let speaker: Speaker
-                if self.currentSpeakerId == "1" || self.currentSpeakerId == "SPEAKER_0" {
-                    speaker = .you
-                } else {
-                    speaker = .speaker(self.getSpeakerNumber(for: self.currentSpeakerId))
-                }
+                // Use diarization to determine speaker number
+                let speakerNum = self.getSpeakerNumber(for: self.currentSpeakerId)
+                let speaker: Speaker = .speaker(speakerNum)
                 print("DEBUG: Current speaker: \(self.currentSpeakerId) -> \(speaker)")
                 self.recordingState.setTranscript(trimmedText, speaker: speaker)
             }
@@ -134,20 +129,16 @@ class AudioCaptureManager {
     ) -> String {
         guard !alignedWords.isEmpty else { return "" }
 
-        // First speaker encountered is assumed to be "You" (the mic owner)
-        let firstSpeakerId = alignedWords.first?.speakerId ?? ""
-        var otherSpeakerCount = 0
+        // Label speakers sequentially based on first appearance
+        var speakerNumber = 0
         var speakerLabels: [String: String] = [:]
 
         func labelFor(_ speakerId: String) -> String {
-            if speakerId == firstSpeakerId {
-                return "You"
-            }
             if let existing = speakerLabels[speakerId] {
                 return existing
             }
-            otherSpeakerCount += 1
-            let label = "Speaker \(otherSpeakerCount + 1)"
+            speakerNumber += 1
+            let label = "Speaker \(speakerNumber)"
             speakerLabels[speakerId] = label
             return label
         }
@@ -335,9 +326,9 @@ class AudioCaptureManager {
                     }
 
                     if speakerCount <= 1 {
-                        // Single speaker - label as "You"
+                        // Single speaker
                         let text = wordSegments.map { $0.word }.joined(separator: " ")
-                        transcript = "[You]: \(text)"
+                        transcript = "[Speaker 1]: \(text)"
                         print("DEBUG: Single speaker detected, using simple format")
                     } else {
                         // Multiple speakers - align words to speakers
