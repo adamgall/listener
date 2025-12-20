@@ -40,22 +40,69 @@ class MicrophoneCapture {
         }
     }
 
+    private var peakLevel: Float = 0
+    private var levelLogCount = 0
+
     func start() throws {
         guard !isRunning else { return }
 
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        audioConverter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        // Log input device info
+        let audioSession = audioEngine.inputNode.auAudioUnit
+        print("DEBUG: Audio input node: \(inputNode)")
+        print("DEBUG: Mic input format: \(inputFormat)")
+        print("DEBUG: Sample rate: \(inputFormat.sampleRate), channels: \(inputFormat.channelCount)")
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            guard let self = self, let convertedBuffer = self.convert(buffer: buffer) else { return }
+        audioConverter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        print("DEBUG: Audio converter created: \(audioConverter != nil)")
+
+        peakLevel = 0
+        levelLogCount = 0
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, time in
+            guard let self = self else { return }
+
+            // Check audio level
+            if let channelData = buffer.floatChannelData?[0] {
+                var sum: Float = 0
+                var maxSample: Float = 0
+                for i in 0..<Int(buffer.frameLength) {
+                    let sample = abs(channelData[i])
+                    sum += sample
+                    if sample > maxSample { maxSample = sample }
+                }
+                let avgLevel = sum / Float(buffer.frameLength)
+
+                // Track peak
+                if maxSample > self.peakLevel {
+                    self.peakLevel = maxSample
+                }
+
+                // Log periodically with more info
+                self.levelLogCount += 1
+                if self.levelLogCount % 50 == 0 {
+                    print("DEBUG: Audio levels - avg:\(String(format: "%.4f", avgLevel)) max:\(String(format: "%.4f", maxSample)) peak:\(String(format: "%.4f", self.peakLevel))")
+                }
+
+                // Alert if we see speech-level audio (> 0.1)
+                if maxSample > 0.1 {
+                    print("DEBUG: 🎤 SPEECH detected! level=\(String(format: "%.3f", maxSample))")
+                }
+            }
+
+            guard let convertedBuffer = self.convert(buffer: buffer) else {
+                print("DEBUG: Tap callback - conversion failed")
+                return
+            }
             self.onAudioBuffer?(convertedBuffer, .microphone)
         }
 
         audioEngine.prepare()
         try audioEngine.start()
         isRunning = true
+        print("DEBUG: Mic audio engine started successfully")
     }
 
     func stop() {

@@ -6,7 +6,7 @@ struct ListenerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(audioCapture: appDelegate.audioCapture)
                 .environmentObject(appDelegate.recordingState)
                 .environmentObject(appDelegate.transcriptionStore)
         }
@@ -19,11 +19,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var recordingState = RecordingState()
     var transcriptionStore = TranscriptionStore()
-    var audioCapture: AudioCaptureManager?
+    lazy var audioCapture: AudioCaptureManager = {
+        AudioCaptureManager(recordingState: recordingState, transcriptionStore: transcriptionStore)
+    }()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
-        audioCapture = AudioCaptureManager(recordingState: recordingState, transcriptionStore: transcriptionStore)
+        _ = audioCapture // Force initialization
     }
 
     private func setupMenuBar() {
@@ -72,9 +74,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleRecording() {
         if recordingState.isRecording {
-            audioCapture?.stopRecording()
+            audioCapture.stopRecording()
         } else {
-            audioCapture?.startRecording()
+            audioCapture.startRecording()
         }
     }
 

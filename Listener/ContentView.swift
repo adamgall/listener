@@ -1,14 +1,18 @@
 import SwiftUI
+import AVFoundation
+import Speech
+import ScreenCaptureKit
 
 struct ContentView: View {
     @EnvironmentObject var recordingState: RecordingState
     @EnvironmentObject var transcriptionStore: TranscriptionStore
     @State private var selectedTranscription: Transcription?
+    var audioCapture: AudioCaptureManager?
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                RecordingHeader(recordingState: recordingState, transcriptionStore: transcriptionStore)
+                RecordingHeader(recordingState: recordingState, transcriptionStore: transcriptionStore, audioCapture: audioCapture)
                 Divider()
                 TranscriptionsList(
                     transcriptions: transcriptionStore.transcriptions,
@@ -35,6 +39,7 @@ struct ContentView: View {
 struct RecordingHeader: View {
     @ObservedObject var recordingState: RecordingState
     @ObservedObject var transcriptionStore: TranscriptionStore
+    var audioCapture: AudioCaptureManager?
 
     var body: some View {
         VStack(spacing: 12) {
@@ -62,24 +67,18 @@ struct RecordingHeader: View {
                 }
                 .buttonStyle(.plain)
             }
+            PermissionStatusView()
         }
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private func toggleRecording() {
+        print("DEBUG: toggleRecording called, audioCapture = \(String(describing: audioCapture))")
         if recordingState.isRecording {
-            recordingState.stopRecording()
-            if !recordingState.currentTranscript.isEmpty {
-                let transcription = Transcription(
-                    content: recordingState.currentTranscript,
-                    duration: recordingState.recordingDuration
-                )
-                transcriptionStore.save(transcription)
-            }
-            recordingState.recordingDuration = 0
+            audioCapture?.stopRecording()
         } else {
-            recordingState.startRecording()
+            audioCapture?.startRecording()
         }
     }
 
@@ -150,9 +149,6 @@ struct TranscriptionRow: View {
                 Image(systemName: "clock")
                     .font(.caption2)
                 Text(transcription.formattedDuration)
-                    .font(.caption)
-                Text("•")
-                Text(transcription.createdAt, style: .relative)
                     .font(.caption)
             }
             .foregroundColor(.secondary)
@@ -338,5 +334,83 @@ struct EmptyDetailView: View {
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct PermissionStatusView: View {
+    @State private var micStatus: String = "..."
+    @State private var speechStatus: String = "..."
+    @State private var screenStatus: String = "..."
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Permissions").font(.caption).fontWeight(.semibold)
+            HStack(spacing: 12) {
+                PermissionBadge(name: "Mic", status: micStatus)
+                PermissionBadge(name: "Speech", status: speechStatus)
+                PermissionBadge(name: "Screen", status: screenStatus)
+            }
+        }
+        .onAppear { checkPermissions() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            checkPermissions()
+        }
+    }
+
+    private func checkPermissions() {
+        // Microphone
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: micStatus = "OK"
+        case .denied: micStatus = "NO"
+        case .restricted: micStatus = "NO"
+        case .notDetermined: micStatus = "?"
+        @unknown default: micStatus = "?"
+        }
+
+        // Speech Recognition
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized: speechStatus = "OK"
+        case .denied: speechStatus = "NO"
+        case .restricted: speechStatus = "NO"
+        case .notDetermined: speechStatus = "?"
+        @unknown default: speechStatus = "?"
+        }
+
+        // Screen Recording - check async
+        Task {
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                await MainActor.run {
+                    screenStatus = content.displays.isEmpty ? "NO" : "OK"
+                }
+            } catch {
+                await MainActor.run {
+                    screenStatus = "NO"
+                }
+            }
+        }
+    }
+}
+
+struct PermissionBadge: View {
+    let name: String
+    let status: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+            Text(name)
+                .font(.caption2)
+        }
+    }
+
+    private var statusColor: Color {
+        switch status {
+        case "OK": return .green
+        case "NO": return .red
+        default: return .orange
+        }
     }
 }

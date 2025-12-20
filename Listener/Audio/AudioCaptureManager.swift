@@ -18,6 +18,7 @@ class AudioCaptureManager {
     private var speakerIdMap: [String: Int] = [:]
     private var nextSpeakerNumber = 1
     private var diarizationTimer: Timer?
+    private var diarizationAvailable = false
 
     init(recordingState: RecordingState, transcriptionStore: TranscriptionStore) {
         self.recordingState = recordingState
@@ -48,29 +49,38 @@ class AudioCaptureManager {
 
     private func setupTranscribers() {
         micTranscriber.onTranscription = { [weak self] text, isFinal in
-            guard let self = self, !text.isEmpty else { return }
+            print("DEBUG: micTranscriber got: '\(text.prefix(80))...' isFinal=\(isFinal)")
+            guard let self = self else { return }
+
+            // Only update if we have actual text (not empty/shorter than what we have)
+            // This prevents losing text when stop triggers an empty final result
+            let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedText.isEmpty, trimmedText.count >= self.lastMicText.count else {
+                print("DEBUG: Ignoring empty/shorter result")
+                return
+            }
+
             DispatchQueue.main.async {
-                if text != self.lastMicText {
-                    let newText = String(text.dropFirst(self.lastMicText.count))
-                    if !newText.trimmingCharacters(in: .whitespaces).isEmpty {
-                        self.recordingState.appendTranscript(newText.trimmingCharacters(in: .whitespaces), speaker: .you)
-                    }
-                    self.lastMicText = text
+                self.lastMicText = trimmedText
+
+                // Use diarization to determine speaker
+                // Assume first speaker detected (usually '1') is "You"
+                let speaker: Speaker
+                if self.currentSpeakerId == "1" || self.currentSpeakerId == "SPEAKER_0" {
+                    speaker = .you
+                } else {
+                    speaker = .speaker(self.getSpeakerNumber(for: self.currentSpeakerId))
                 }
+                print("DEBUG: Current speaker: \(self.currentSpeakerId) -> \(speaker)")
+                self.recordingState.setTranscript(trimmedText, speaker: speaker)
             }
         }
 
         systemTranscriber.onTranscription = { [weak self] text, isFinal in
+            print("DEBUG: systemTranscriber got: '\(text.prefix(80))...' isFinal=\(isFinal)")
             guard let self = self, !text.isEmpty else { return }
             DispatchQueue.main.async {
-                if text != self.lastSystemText {
-                    let newText = String(text.dropFirst(self.lastSystemText.count))
-                    if !newText.trimmingCharacters(in: .whitespaces).isEmpty {
-                        let speakerNum = self.getSpeakerNumber(for: self.currentSpeakerId)
-                        self.recordingState.appendTranscript(newText.trimmingCharacters(in: .whitespaces), speaker: .speaker(speakerNum))
-                    }
-                    self.lastSystemText = text
-                }
+                self.lastSystemText = text
             }
         }
     }
@@ -87,21 +97,31 @@ class AudioCaptureManager {
 
     private func updateDiarization() {
         let segments = speakerDiarizer.processDiarization()
+        if !segments.isEmpty {
+            print("DEBUG: Diarization found \(segments.count) segments")
+            for segment in segments {
+                print("DEBUG:   Speaker '\(segment.speakerId)' from \(String(format: "%.1f", segment.startTime))s to \(String(format: "%.1f", segment.endTime))s")
+            }
+        }
         if let lastSegment = segments.last {
             currentSpeakerId = lastSegment.speakerId
         }
     }
 
     func startRecording() {
+        print("DEBUG: startRecording called")
         Task {
+            print("DEBUG: Task started")
             // Request permissions
             let micPermission = await microphoneCapture?.requestPermission() ?? false
+            print("DEBUG: mic permission = \(micPermission)")
             guard micPermission else {
                 print("Microphone permission denied")
                 return
             }
 
             let speechPermission = await micTranscriber.requestPermission()
+            print("DEBUG: speech permission = \(speechPermission)")
             guard speechPermission else {
                 print("Speech recognition permission denied")
                 return
@@ -112,8 +132,14 @@ class AudioCaptureManager {
             }
 
             do {
-                // Initialize speaker diarizer
-                try await speakerDiarizer.initialize()
+                // Try to initialize speaker diarizer (optional - may fail if no network)
+                do {
+                    try await speakerDiarizer.initialize()
+                    diarizationAvailable = true
+                } catch {
+                    print("Diarization unavailable (will use generic speaker labels): \(error)")
+                    diarizationAvailable = false
+                }
 
                 // Reset state
                 lastMicText = ""
@@ -123,23 +149,36 @@ class AudioCaptureManager {
                 nextSpeakerNumber = 1
                 speakerDiarizer.reset()
 
-                // Start transcribers
+                // Start mic transcriber
                 try micTranscriber.startTranscribing()
-                try systemTranscriber.startTranscribing()
 
                 // Start audio capture
                 try microphoneCapture?.start()
 
+                // Try system audio (optional - may fail)
+                var systemAudioWorking = false
                 if #available(macOS 12.3, *), let sysCapture = systemAudioCapture as? SystemAudioCapture {
-                    try await sysCapture.start()
+                    do {
+                        try await sysCapture.start()
+                        print("DEBUG: System audio capture started")
+                        // Only start system transcriber if capture succeeded
+                        try systemTranscriber.startTranscribing()
+                        systemAudioWorking = true
+                    } catch {
+                        print("System audio unavailable (mic-only mode): \(error.localizedDescription)")
+                    }
                 }
+                print("DEBUG: System audio working: \(systemAudioWorking)")
 
                 await MainActor.run {
                     recordingState.startRecording()
+                    print("DEBUG: Recording started!")
 
-                    // Start periodic diarization updates
-                    self.diarizationTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-                        self?.updateDiarization()
+                    // Start periodic diarization updates if available
+                    if self.diarizationAvailable {
+                        self.diarizationTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                            self?.updateDiarization()
+                        }
                     }
                 }
             } catch {
@@ -171,23 +210,79 @@ class AudioCaptureManager {
             // Small delay to let final transcriptions come through
             try? await Task.sleep(nanoseconds: 500_000_000)
 
+            // Run final diarization pass
+            var diarizationSegments: [(speakerId: String, startTime: Float, endTime: Float)] = []
+            if diarizationAvailable {
+                print("DEBUG: Running final diarization...")
+                diarizationSegments = speakerDiarizer.processDiarization()
+                print("DEBUG: Final diarization found \(diarizationSegments.count) speaker segments")
+                for segment in diarizationSegments {
+                    print("DEBUG:   Speaker '\(segment.speakerId)' from \(String(format: "%.1f", segment.startTime))s to \(String(format: "%.1f", segment.endTime))s")
+                }
+
+                // Count unique speakers
+                let uniqueSpeakers = Set(diarizationSegments.map { $0.speakerId })
+                print("DEBUG: Identified \(uniqueSpeakers.count) unique speaker(s): \(uniqueSpeakers)")
+            }
+
             await MainActor.run {
-                let transcript = recordingState.currentTranscript
                 let duration = recordingState.recordingDuration
                 recordingState.stopRecording()
+
+                // Format transcript with speaker info from diarization
+                var transcript = ""
+                let rawText = self.lastMicText
+
+                if !rawText.isEmpty {
+                    let uniqueSpeakers = Set(diarizationSegments.map { $0.speakerId }).sorted()
+                    let speakerCount = uniqueSpeakers.count
+
+                    if speakerCount <= 1 {
+                        // Single speaker - label as "You"
+                        transcript = "[You]: \(rawText)"
+                    } else {
+                        // Multiple speakers detected
+                        // For now, show a header with speaker breakdown and the full transcript
+                        // TODO: Implement proper text-to-speaker alignment using word timestamps
+                        var speakerSummary: [String] = []
+                        for speakerId in uniqueSpeakers {
+                            let segments = diarizationSegments.filter { $0.speakerId == speakerId }
+                            let totalTime = segments.reduce(0.0) { $0 + ($1.endTime - $1.startTime) }
+                            let label = speakerId == "1" ? "You" : "Speaker \(speakerId)"
+                            speakerSummary.append("\(label): \(String(format: "%.0f", totalTime))s")
+                        }
+
+                        transcript = "[Speakers: \(speakerSummary.joined(separator: ", "))]\n\n\(rawText)"
+                    }
+                }
+
+                print("DEBUG: Saving transcript with \(transcript.count) chars, duration=\(duration)")
 
                 if !transcript.isEmpty {
                     let transcription = Transcription(content: transcript, duration: duration)
                     transcriptionStore.save(transcription)
+                    print("DEBUG: Transcription saved!")
+                } else {
+                    print("DEBUG: Transcript was empty, not saving")
                 }
             }
         }
     }
 
+    private var bufferCount = 0
+
     private func handleAudioBuffer(_ buffer: AVAudioPCMBuffer, from source: AudioSource) {
+        bufferCount += 1
+        if bufferCount % 100 == 0 {
+            print("DEBUG: Received \(bufferCount) audio buffers from \(source)")
+        }
         switch source {
         case .microphone:
             micTranscriber.appendAudioBuffer(buffer)
+            // Also feed to diarizer for speaker identification
+            if diarizationAvailable {
+                speakerDiarizer.appendAudioBuffer(buffer)
+            }
         case .system:
             systemTranscriber.appendAudioBuffer(buffer)
             speakerDiarizer.appendAudioBuffer(buffer)

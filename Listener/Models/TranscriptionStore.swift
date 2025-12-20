@@ -7,8 +7,13 @@ class TranscriptionStore: ObservableObject {
     private let saveURL: URL
 
     init() {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        saveURL = documentsPath.appendingPathComponent("listener_transcriptions.json")
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let appFolder = appSupport.appendingPathComponent("Listener", isDirectory: true)
+
+        // Create app folder if needed
+        try? FileManager.default.createDirectory(at: appFolder, withIntermediateDirectories: true)
+
+        saveURL = appFolder.appendingPathComponent("transcriptions.json")
         load()
     }
 
