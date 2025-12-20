@@ -163,16 +163,24 @@ struct TranscriptionRow: View {
 
 struct LiveTranscriptionView: View {
     @ObservedObject var recordingState: RecordingState
+    private let maxWords = 25
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Header with speaker indicator
             HStack {
                 Image(systemName: "waveform")
                     .foregroundColor(.red)
                 Text("Live Transcription")
                     .font(.title2)
                     .fontWeight(.semibold)
+
                 Spacer()
+
+                // Live speaker indicator
+                SpeakerBadge(speaker: recordingState.currentSpeaker)
+                    .animation(.easeInOut(duration: 0.3), value: recordingState.currentSpeaker)
+
                 Text(formatDuration(recordingState.recordingDuration))
                     .font(.title3)
                     .monospacedDigit()
@@ -181,33 +189,25 @@ struct LiveTranscriptionView: View {
             .padding()
             .background(Color(nsColor: .controlBackgroundColor))
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    if recordingState.currentTranscript.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "waveform.circle")
-                                .font(.system(size: 48))
-                                .foregroundColor(.secondary)
-                            Text("Listening...")
-                                .font(.title3)
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding()
-                    } else {
-                        Text(recordingState.currentTranscript)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id("transcript")
-                    }
+            // Fade transition transcript view
+            if recordingState.currentTranscript.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "waveform.circle")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("Listening...")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
                 }
-                .onChange(of: recordingState.currentTranscript) { _ in
-                    withAnimation {
-                        proxy.scrollTo("transcript", anchor: .bottom)
-                    }
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                FadingTranscriptView(
+                    text: recordingState.currentTranscript,
+                    maxWords: maxWords
+                )
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
         }
     }
@@ -216,6 +216,73 @@ struct LiveTranscriptionView: View {
         let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+struct SpeakerBadge: View {
+    let speaker: Speaker
+
+    var body: some View {
+        Text(speaker.description)
+            .font(.caption)
+            .fontWeight(.medium)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(speakerColor.opacity(0.2))
+            .foregroundColor(speakerColor)
+            .clipShape(Capsule())
+    }
+
+    private var speakerColor: Color {
+        switch speaker {
+        case .you:
+            return .blue
+        case .speaker:
+            return .orange
+        }
+    }
+}
+
+struct FadingTranscriptView: View {
+    let text: String
+    let maxWords: Int
+
+    var body: some View {
+        let words = text.split(separator: " ").map(String.init)
+        let displayWords: [(String, Double)] = {
+            if words.count <= maxWords {
+                return words.map { ($0, 1.0) }
+            }
+            let startIndex = words.count - maxWords
+            return words.suffix(maxWords).enumerated().map { index, word in
+                // First few words fade out
+                let fadeLength = 5
+                if index < fadeLength {
+                    let opacity = Double(index + 1) / Double(fadeLength + 1)
+                    return (word, opacity)
+                }
+                return (word, 1.0)
+            }
+        }()
+
+        Text(attributedText(words: displayWords))
+            .font(.title3)
+            .lineSpacing(6)
+            .textSelection(.enabled)
+            .animation(.easeOut(duration: 0.15), value: text)
+    }
+
+    private func attributedText(words: [(String, Double)]) -> AttributedString {
+        var result = AttributedString()
+        for (index, (word, opacity)) in words.enumerated() {
+            var wordAttr = AttributedString(word)
+            wordAttr.foregroundColor = Color.primary.opacity(opacity)
+            result.append(wordAttr)
+            if index < words.count - 1 {
+                result.append(AttributedString(" "))
+            }
+        }
+        return result
     }
 }
 

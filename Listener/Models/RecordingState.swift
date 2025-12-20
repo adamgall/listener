@@ -4,6 +4,7 @@ import Combine
 class RecordingState: ObservableObject {
     @Published var isRecording = false
     @Published var currentTranscript = ""
+    @Published var currentSpeaker: Speaker = .you
     @Published var recordingDuration: TimeInterval = 0
 
     private var timer: Timer?
@@ -12,6 +13,7 @@ class RecordingState: ObservableObject {
     func startRecording() {
         isRecording = true
         currentTranscript = ""
+        currentSpeaker = .you
         startTime = Date()
         recordingDuration = 0
 
@@ -31,6 +33,7 @@ class RecordingState: ObservableObject {
         // For live display, just show the text without speaker prefix
         // Speaker labeling will be done at save time using diarization
         currentTranscript = text
+        currentSpeaker = speaker
     }
 }
 
